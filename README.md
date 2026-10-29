@@ -85,6 +85,8 @@ O mod não observa o trabalho em si: ele escuta chamadas de ferramenta.
 | `Agent` (subagente) | `◆ tipo: descrição`, filha da única tarefa em `▶`, se houver uma só | a lista de agentes diz `completed`, `failed` ou `killed` (conferida a cada minuto e ao fim de cada turno do subagente) |
 | `Bash` com `run_in_background` | `◐ descrição ou comando`, filha da única tarefa em `▶` | o aviso de término do processo chega na conversa |
 
+Ao carregar (sessão nova ou recarga do mod), os subagentes que já estão rodando entram na árvore, com o tempo contado a partir dali. Processos em segundo plano que começaram antes do mod carregar não aparecem: não há uma lista deles para consultar.
+
 Subagentes e processos terminados ficam 5 minutos como `✓ levou X` (ou `✕ falhou`) e depois saem da árvore. Eles não têm estimativa: não entram no `resta` nem no `+N sem estimativa`.
 
 ## Como ler a árvore

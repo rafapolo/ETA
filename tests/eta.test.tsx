@@ -266,7 +266,8 @@ test('subagentes e processos em segundo plano entram com ícone próprio e saem 
   fuso(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  let agentes = [{ id: 'a1', description: 'achar o CSV', type: 'Explore', status: 'running' }]
+  const a1 = { id: 'a1', description: 'achar o CSV', type: 'Explore', status: 'running' }
+  let agentes: (typeof a1)[] = []
   on('agent.list', () => ({ value: agentes }) as never)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { agentId: 'a1' } }) as never)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }) as never)
@@ -278,6 +279,7 @@ test('subagentes e processos em segundo plano entram com ícone próprio e saem 
 
   await $.tool.call({ tool: 'mcp__eta__plano', objetivo: 'x', tarefas: [{ id: 'imp', titulo: 'Importar dados', min: 60, max: 120, estado: 'andamento' }] })
   await $.tool.call({ tool: 'Agent', description: 'achar o CSV', subagent_type: 'Explore', prompt: 'p' } as never)
+  agentes = [a1]
   await $.tool.call({ tool: 'Bash', command: 'bun run importa.ts 2024-01', run_in_background: true } as never)
   await clock.advance(3 * MIN)
 
@@ -288,7 +290,7 @@ test('subagentes e processos em segundo plano entram com ícone próprio e saem 
   await ui.unmount()
 
   // O agente acaba (a lista diz) e o aviso do processo chega como mensagem na conversa
-  agentes = [{ ...agentes[0]!, status: 'completed' }]
+  agentes = [{ ...a1, status: 'completed' }]
   await clock.advance(MIN)
   const msg = await $.ui.mount({ plugin: 'eta', surface: 'terminal', component: 'UserMessage', props: { task: { id: 'b1', status: 'failed' } } } as never)
   await msg.unmount()
@@ -303,5 +305,22 @@ test('subagentes e processos em segundo plano entram com ícone próprio e saem 
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Explore/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /importa/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('ao carregar, subagentes que já rodam entram na árvore', async ($, on) => {
+  mock.clock(on, { now: 1_000 * MIN })
+  mock.store(on)
+  fuso(on)
+  on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('agent.list', () => ({ value: [
+    { id: 'a9', description: 'revisar o README', type: 'general-purpose', status: 'running' },
+    { id: 'a8', description: 'velho', type: 'Explore', status: 'completed' },
+  ] }) as never)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /revisar/ }))?.text).toBe('◆ general-purpose: revisar o README — 0 min')
+  expect(await ui.find({ type: 'Text', text: /velho/ })).toBeUndefined()
   await ui.unmount()
 })

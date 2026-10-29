@@ -347,6 +347,20 @@ async function encerra($: EngineInterface, achar: (t: Tarefa) => boolean, status
   }))
 }
 
+// Ao carregar (sessão nova ou recarga do mod), os subagentes que já rodam entram na árvore; o início real
+// não se sabe, então conta a partir daqui. Shells em segundo plano não têm lista: só os que começarem depois
+async function semeiaAgentes($: EngineInterface) {
+  const rodando = (await $.agent.list()).filter(a => a.status === 'running' || a.status === 'pending' || a.status === 'waiting')
+  if (rodando.length === 0) return
+  const ms = await $.clock.now()
+  await aplica($, atual =>
+    rodando.reduce(
+      (p, a) => entraParalela(p, { id: `agente:${a.id}`, titulo: `${a.type}: ${a.description}`, tipo: 'agente', ref: null, inicio: ms, fim: null }),
+      atual,
+    ),
+  )
+}
+
 async function confereAgentes($: EngineInterface) {
   const p = await read($, plano)
   if (!p?.tarefas.some(t => t.tipo === 'agente' && t.estado === 'andamento')) return
@@ -449,6 +463,9 @@ export const register: Register = on => {
 
     const inicio = await $.clock.now()
     await update($, agora, () => inicio)
+    try {
+      await semeiaAgentes($)
+    } catch {}
     $.clock.every(TICK_MS, () => {
       void (async () => {
         const ms = await $.clock.now()
