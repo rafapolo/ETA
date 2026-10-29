@@ -353,3 +353,29 @@ test('a plan and history stored by the Portuguese version are migrated', async (
   const text = String(((await $.tool.call({ tool: 'mcp__eta__plan', goal: 'x', tasks: [{ id: 'z', title: 'z', min: 1, max: 2 }] })) as { result?: unknown }).result)
   expect(text).toContain('Calibration: 1/5 tasks measured')
 })
+
+test('rewriting the plan with the same goal keeps the done tasks it left out', async ($, on) => {
+  await start($, on)
+  await $.tool.call(PLAN)
+  await $.tool.call({ tool: 'mcp__eta__task', id: 'data', status: 'running' })
+  await $.tool.call({ tool: 'mcp__eta__task', id: 'data', status: 'done' })
+  await $.tool.call({ tool: 'mcp__eta__task', id: 'readme', status: 'done' })
+  // The rewrite folds the finished work into one line and leaves 'data' and 'readme' out
+  const text = String(((await $.tool.call({
+    tool: 'mcp__eta__plan',
+    goal: 'Update the site',
+    tasks: [
+      { id: 'all', title: 'Everything so far', min: 1, max: 1, status: 'done' },
+      { id: 'commit', title: 'Commit', min: 2, max: 5 },
+      { id: 'push', title: 'Push', parent: 'commit', min: 1, max: 2 },
+    ],
+  })) as { result?: unknown }).result)
+  expect(text).toContain('✓ Regenerate JSON')
+  expect(text).toContain('✓ README')
+  expect(text).toContain('2 done tasks you left out kept')
+  // A new goal is a new request: nothing carries over
+  const fresh = String(((await $.tool.call({
+    tool: 'mcp__eta__plan', goal: 'Something else', tasks: [{ id: 'x', title: 'X', min: 1, max: 2 }],
+  })) as { result?: unknown }).result)
+  expect(fresh).not.toContain('Regenerate JSON')
+})

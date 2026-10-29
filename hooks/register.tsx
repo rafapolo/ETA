@@ -434,7 +434,8 @@ export const register: Register = on => {
       description:
         'Registers the work plan as a task tree with ETAs, shown to the user in a band above the prompt with the ' +
         'real clock. Use it before starting any request with 2 or more steps, and again when the plan changes (it ' +
-        'replaces the previous one, keeping the times of tasks with the same id). parent = id of the task this one ' +
+        'replaces the previous one, keeping the times of tasks with the same id; with the same goal, done tasks you ' +
+        'leave out are kept, so never fold finished work into one line). parent = id of the task this one ' +
         'depends on (it starts only when the parent is done); no parent = independent. min/max = range in wall-clock ' +
         'minutes. status "question" = waits on an answer from the user (write the question in waitingOn); "waiting" = ' +
         `waits on something outside. Once a question is answered, change its status with ${TOOL_TASK}. ` +
@@ -575,9 +576,20 @@ export const register: Register = on => {
       }
       // Mirrored tasks the plan did not name stay, until TodoWrite/TaskUpdate or their end removes them
       const rest = previous.filter(t => mirrored(t) && !used.has(t.id))
-      const { after } = await apply($, () => ({ goal, tasks: [...tasks, ...rest] }))
+      // Same goal: done tasks the new plan left out stay, with their measured time, so a rewrite that
+      // folds finished work into one "done" line (or drops it) does not shrink the count or the history.
+      // A different goal is a new request and starts clean.
+      const sameGoal = (await read($, plan))?.goal === goal
+      const ids = new Set(tasks.map(t => t.id))
+      const kept = sameGoal
+        ? previous
+            .filter(t => t.status === 'done' && !mirrored(t) && !used.has(t.id) && !ids.has(t.id))
+            .map(t => ({ ...t, parent: t.parent && (ids.has(t.parent) || previous.some(o => o.id === t.parent && !used.has(o.id))) ? t.parent : null }))
+        : []
+      const { after } = await apply($, () => ({ goal, tasks: [...kept, ...tasks, ...rest] }))
 
-      return { result: planText(after, ms, await factor($)) }
+      const note = kept.length ? `\n(${kept.length} done task${kept.length > 1 ? 's' : ''} you left out kept from the previous plan.)` : ''
+      return { result: planText(after, ms, await factor($)) + note }
     } catch (err) {
       return { deny: `eta: ${String(err)}` }
     }
