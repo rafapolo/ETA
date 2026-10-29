@@ -7,39 +7,40 @@ const BAND = {
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
+const HEADER = { type: 'Text', text: /^⏱/ } as const
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
 
-// 1000 min após a época = 16:40 UTC; com -0300, 13:40 local
-function fuso(on: On) {
+// 1000 min after the epoch = 16:40 UTC; at -0300, 13:40 local
+function timeZone(on: On) {
   on('process.run', () => ({ value: { exitCode: 0, stdout: '-0300\n', stderr: '', isStdoutTruncated: false } }))
 }
 
-async function inicia($: Parameters<Parameters<typeof test>[1]>[0], on: On) {
+async function start($: Parameters<Parameters<typeof test>[1]>[0], on: On) {
   mock.clock(on, { now: 1_000 * MIN })
   mock.store(on)
-  fuso(on)
+  timeZone(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 }
 
-const PLANO = {
-  tool: 'mcp__eta__plano',
-  objetivo: 'Atualizar o site',
-  tarefas: [
-    { id: 'dados', titulo: 'Regerar JSON', min: 5, max: 10 },
-    { id: 'readme', titulo: 'README', pai: 'dados', min: 5, max: 10 },
-    { id: 'commit', titulo: 'Commit', pai: 'readme', min: 2, max: 5 },
+const PLAN = {
+  tool: 'mcp__eta__plan',
+  goal: 'Update the site',
+  tasks: [
+    { id: 'data', title: 'Regenerate JSON', min: 5, max: 10 },
+    { id: 'readme', title: 'README', parent: 'data', min: 5, max: 10 },
+    { id: 'commit', title: 'Commit', parent: 'readme', min: 2, max: 5 },
   ],
 } as const
 
-test('plano em árvore, relógio real e calibração', async ($, on) => {
+test('plan as a tree, real clock and calibration', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 * MIN })
-  mock.store(on, { historico: Array.from({ length: 5 }, () => ({ estimado: 5, real: 10 })) })
+  mock.store(on, { history: Array.from({ length: 5 }, () => ({ estimated: 5, actual: 10 })) })
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  fuso(on)
+  timeZone(on)
   const toasts: string[] = []
   on('ui.toast', (_, e) => {
     toasts.push(String((e as { text?: unknown }).text ?? JSON.stringify(e)))
@@ -48,29 +49,28 @@ test('plano em árvore, relógio real e calibração', async ($, on) => {
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
-  const plano = await $.tool.call(PLANO)
-  const texto = String((plano as { result?: unknown }).result)
-  expect(texto).toContain('🎯 Atualizar o site — ⏱ resta 12–25 min · fim ~hoje 13:58')
-  // Cada dependência recua sob o ícone da mãe
-  expect(texto).toContain('\n○ Regerar JSON — 5–10 min\n└ ○ README — 5–10 min\n  └ ○ Commit — 2–5 min\n')
-  expect(texto).toContain('2.0×')
+  const text = String(((await $.tool.call(PLAN)) as { result?: unknown }).result)
+  expect(text).toContain('🎯 Update the site — ⏱ 12–25 min left · ends ~13:58')
+  // Each dependency indents under its parent's icon
+  expect(text).toContain('\n○ Regenerate JSON — 5–10 min\n└ ○ README — 5–10 min\n  └ ○ Commit — 2–5 min\n')
+  expect(text).toContain('2.0×')
 
-  await $.tool.call({ tool: 'mcp__eta__tarefa', id: 'dados', estado: 'andamento' })
+  await $.tool.call({ tool: 'mcp__eta__task', id: 'data', status: 'running' })
   await clock.advance(12 * MIN)
-  expect(toasts.join(' ')).toContain('Regerar JSON passou de 5–10 min')
+  expect(toasts.join(' ')).toContain('Regenerate JSON went past 5–10 min')
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Regerar JSON/ }))?.text).toBe('! Regerar JSON — +2 min além')
+  expect((await ui.find({ type: 'Text', text: /Regenerate JSON/ }))?.text).toBe('! Regenerate JSON — +2 min over')
   await ui.unmount()
 
-  const feita = await $.tool.call({ tool: 'mcp__eta__tarefa', id: 'dados', estado: 'feita' })
-  expect(String((feita as { result?: unknown }).result)).toBe('✓ Regerar JSON — levou 12 min (estimado 5–10 min)')
-  const replano = await $.tool.call(PLANO)
-  expect(String((replano as { result?: unknown }).result)).toContain('n=6')
-  expect(String((replano as { result?: unknown }).result)).toContain('✓ Regerar JSON — levou 12 min')
+  const done = await $.tool.call({ tool: 'mcp__eta__task', id: 'data', status: 'done' })
+  expect(String((done as { result?: unknown }).result)).toBe('✓ Regenerate JSON — took 12 min (estimated 5–10 min)')
+  const replan = String(((await $.tool.call(PLAN)) as { result?: unknown }).result)
+  expect(replan).toContain('n=6')
+  expect(replan).toContain('✓ Regenerate JSON — took 12 min')
 })
 
-test('sem plano a faixa fica com o engine', async ($, on) => {
+test('with no plan the band is left to the engine', async ($, on) => {
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
@@ -80,31 +80,31 @@ test('sem plano a faixa fica com o engine', async ($, on) => {
   await ui.unmount()
 })
 
-test('TodoWrite vira árvore sozinho e casa com o plano pelo título', async ($, on) => {
+test('TodoWrite becomes a tree on its own and matches the plan by title', async ($, on) => {
   on('tool.call', { tool: 'TodoWrite' }, () => ({ result: { oldTodos: [], newTodos: [] } }))
-  await inicia($, on)
+  await start($, on)
 
-  await $.tool.call(PLANO)
+  await $.tool.call(PLAN)
   await $.tool.call({
     tool: 'TodoWrite',
     todos: [
-      { content: 'Regerar JSON', status: 'in_progress', activeForm: 'Regerando' },
-      { content: 'Rodar testes', status: 'pending', activeForm: 'Testando' },
+      { content: 'Regenerate JSON', status: 'in_progress', activeForm: 'Regenerating' },
+      { content: 'Run tests', status: 'pending', activeForm: 'Testing' },
     ],
   })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /resta/ }))?.text).toContain('resta 12–25 min + 1 sem estimativa')
-  expect((await ui.find({ type: 'Text', text: /Regerar JSON/ }))?.text).toBe('▶ Regerar JSON — ────────  0% · faltam 5–10 min')
+  expect((await ui.find(HEADER))?.text).toContain('✓ 0/4 · ◷ ~19 min left · +1 unestimated · ✓ ends ~13:58')
+  expect((await ui.find({ type: 'Text', text: /Regenerate JSON/ }))?.text).toBe('▶ Regenerate JSON — ────────  0% · 5–10 min left')
   await ui.unmount()
 
-  // Lista inteira de novo: 'Rodar testes' some, a tarefa do plano fica
-  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Regerar JSON', status: 'completed', activeForm: 'x' }] })
-  const texto = String(((await $.tool.call(PLANO)) as { result?: unknown }).result)
-  expect(texto).toContain('✓ Regerar JSON')
-  expect(texto).not.toContain('Rodar testes')
+  // The whole list again: 'Run tests' leaves, the plan's task stays
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Regenerate JSON', status: 'completed', activeForm: 'x' }] })
+  const text = String(((await $.tool.call(PLAN)) as { result?: unknown }).result)
+  expect(text).toContain('✓ Regenerate JSON')
+  expect(text).not.toContain('Run tests')
 })
 
-test('TaskCreate e TaskUpdate entram na árvore com dependência', async ($, on) => {
+test('TaskCreate and TaskUpdate join the tree with dependencies', async ($, on) => {
   let n = 0
   on('tool.call', { tool: 'TaskCreate' }, (_, e) => ({
     result: { task: { id: String(++n), subject: (e as { subject: string }).subject } },
@@ -112,83 +112,83 @@ test('TaskCreate e TaskUpdate entram na árvore com dependência', async ($, on)
   on('tool.call', { tool: 'TaskUpdate' }, (_, e) => ({
     result: { success: true, taskId: (e as { taskId: string }).taskId, updatedFields: [] },
   }))
-  await inicia($, on)
+  await start($, on)
 
-  await $.tool.call({ tool: 'TaskCreate', subject: 'Baixar dados', description: 'x' })
-  await $.tool.call({ tool: 'TaskCreate', subject: 'Gerar gráfico', description: 'y' })
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Download data', description: 'x' })
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Draw chart', description: 'y' })
   await $.tool.call({ tool: 'TaskUpdate', taskId: '2', addBlockedBy: ['1'] })
   await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Baixar dados/ }))?.text).toBe('▶ Baixar dados — 0 min')
-  expect((await ui.find({ type: 'Text', text: /Gerar gráfico/ }))?.text).toBe('└ ○ Gerar gráfico — ?')
+  expect((await ui.find({ type: 'Text', text: /Download data/ }))?.text).toBe('▶ Download data — 0 min')
+  expect((await ui.find({ type: 'Text', text: /Draw chart/ }))?.text).toBe('└ ○ Draw chart — ?')
   await ui.unmount()
 
   await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'deleted' })
   const ui2 = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await ui2.find({ type: 'Text', text: /Gerar gráfico/ })).toBeUndefined()
+  expect(await ui2.find({ type: 'Text', text: /Draw chart/ })).toBeUndefined()
   await ui2.unmount()
 })
 
-test('progresso compacto: meio da faixa, horas e estouro', async ($, on) => {
+test('compact progress: range midpoint, hours and overrun', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 * MIN })
   mock.store(on)
-  fuso(on)
+  timeZone(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   await $.tool.call({
-    tool: 'mcp__eta__plano',
-    objetivo: 'x',
-    tarefas: [
-      { id: 'a', titulo: 'Curta', min: 5, max: 10, estado: 'andamento' },
-      { id: 'b', titulo: 'Longa', min: 2400, max: 3600, estado: 'andamento' },
+    tool: 'mcp__eta__plan',
+    goal: 'x',
+    tasks: [
+      { id: 'a', title: 'Short', min: 5, max: 10, status: 'running' },
+      { id: 'b', title: 'Long', min: 2400, max: 3600, status: 'running' },
     ],
   })
   await clock.advance(7 * MIN)
   let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Curta/ }))?.text).toBe('▶ Curta — ━━━━━━━─  93% · até 3 min')
+  expect((await ui.find({ type: 'Text', text: /Short/ }))?.text).toBe('▶ Short — ━━━━━━━─  93% · up to 3 min left')
   await ui.unmount()
 
   await clock.advance(68 * MIN)
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Longa/ }))?.text).toBe('▶ Longa — ────────  2% · faltam ~49 h (39–59)')
-  expect((await ui.find({ type: 'Text', text: /Curta/ }))?.text).toBe('! Curta — parada? +1:05 h além')
+  expect((await ui.find({ type: 'Text', text: /Long/ }))?.text).toBe('▶ Long — ────────  2% · ~49 h (39–59) left')
+  expect((await ui.find({ type: 'Text', text: /Short/ }))?.text).toBe('! Short — stalled? +1:05 h over')
   await ui.unmount()
 })
 
-test('tarefa que começou depois do último tique não quebra a faixa', async ($, on) => {
+test('a task started after the last tick does not break the band', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 * MIN })
   mock.store(on)
-  fuso(on)
+  timeZone(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   await $.tool.call({
-    tool: 'mcp__eta__plano',
-    objetivo: 'x',
-    tarefas: [
-      { id: 'f', titulo: 'feitas', min: 0, max: 0, estado: 'feita' },
-      { id: 'l', titulo: 'Longa', min: 900, max: 2400 },
+    tool: 'mcp__eta__plan',
+    goal: 'x',
+    tasks: [
+      { id: 'f', title: 'finished', min: 0, max: 0, status: 'done' },
+      { id: 'l', title: 'Long', min: 900, max: 2400 },
     ],
   })
   await clock.advance(30_000)
-  await $.tool.call({ tool: 'mcp__eta__tarefa', id: 'l', estado: 'andamento' })
+  await $.tool.call({ tool: 'mcp__eta__task', id: 'l', status: 'running' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Longa/ }))?.text).toBe('▶ Longa — ────────  0% · faltam ~28 h (15–40)')
+  expect((await ui.find({ type: 'Text', text: /Long/ }))?.text).toBe('▶ Long — ────────  0% · ~28 h (15–40) left')
   await ui.unmount()
 })
 
-test('árvore sempre completa e /eta abre e fecha a faixa', async ($, on) => {
+test('the full tree always shows and /eta shows and hides the band', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 * MIN })
   mock.store(on)
-  fuso(on)
+  timeZone(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('command.register', () => ({ value: {} }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  // O engine desenha a faixa vazia quando o mod a deixa passar
+  // The engine draws the empty band when the mod lets it through
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
@@ -196,131 +196,160 @@ test('árvore sempre completa e /eta abre e fecha a faixa', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   await $.tool.call({
-    tool: 'mcp__eta__plano',
-    objetivo: 'Migrar o banco, reprocessar os arquivos antigos e publicar a v2 com um título bem comprido',
-    tarefas: [
-      { id: 'staging', titulo: 'Dados em staging', min: 5, max: 10, estado: 'feita' },
-      { id: 'reproc', titulo: 'reprocessa_2025', pai: 'staging', min: 60, max: 120, estado: 'andamento' },
-      { id: 'anexa', titulo: 'anexa', pai: 'reproc', min: 30, max: 90 },
-      { id: 'views', titulo: 'views', pai: 'anexa', min: 20, max: 40 },
-      { id: 'importa', titulo: 'Importar dados', min: 240, max: 1440, estado: 'andamento' },
-      { id: 'ok', titulo: 'formato do relatório', min: 60, max: 120, estado: 'esperando', esperando: 'seu ok' },
+    tool: 'mcp__eta__plan',
+    goal: 'Migrate the database, reprocess the old files and ship v2 with a rather long title',
+    tasks: [
+      { id: 'staging', title: 'Data in staging', min: 5, max: 10, status: 'done' },
+      { id: 'reproc', title: 'reprocess_2025', parent: 'staging', min: 60, max: 120, status: 'running' },
+      { id: 'attach', title: 'attach', parent: 'reproc', min: 30, max: 90 },
+      { id: 'views', title: 'views', parent: 'attach', min: 20, max: 40 },
+      { id: 'import', title: 'Import data', min: 240, max: 1440, status: 'running' },
+      { id: 'ok', title: 'report format', min: 60, max: 120, status: 'waiting', waitingOn: 'upload confirms' },
     ],
   })
   await clock.advance(10 * MIN)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const cab = (await ui.find({ type: 'Text', text: /resta/ }))?.text ?? ''
-  // As duas em andamento correm juntas (vale Importar, 230–1430); a fila soma em série (anexa, views, plano: 110–250)
-  expect(cab).toContain('✓ 1/6 · ◷ resta ~17 h (6–28) · ✓ fim ~amanhã 06:40')
-  expect(cab).not.toContain('/eta')
-  expect(cab.startsWith('⏱ Migrar o banco')).toBe(true)
-  expect(cab).toContain('…')
-  expect(cab.length).toBeLessThanOrEqual(100)
-  expect((await ui.find({ type: 'Text', text: /esperando:/ }))?.text).toBe('◷ 1 esperando: formato do relatório (seu ok)')
-  // Feitas ficam e a fila inteira aparece, sem conta de "+N depois"
-  expect((await ui.find({ type: 'Text', text: /Dados em staging/ }))?.text).toBe('✓ Dados em staging')
-  expect((await ui.find({ type: 'Text', text: /reprocessa_2025/ }))?.text).toBe('└ ▶ reprocessa_2025 — ────────  11% · faltam ~1:20 h (0:50–1:50)')
-  expect((await ui.find({ type: 'Text', text: /anexa/ }))?.text).toBe('  └ ○ anexa — 0:30–1:30 h')
+  const header = (await ui.find(HEADER))?.text ?? ''
+  // The two running tasks run together (Import counts, 230–1430); the queue adds up in series (attach, views, report: 110–250)
+  expect(header).toContain('✓ 1/6 · ◷ ~17 h left · ✓ ends ~tomorrow 06:40')
+  expect(header.startsWith('⏱ Migrate the database')).toBe(true)
+  expect(header).toContain('…')
+  expect(header.length).toBeLessThanOrEqual(100)
+  expect((await ui.find({ type: 'Text', text: /waiting:/ }))?.text).toBe('◷ 1 waiting: report format (upload confirms)')
+  expect((await ui.find({ type: 'Text', text: /Data in staging/ }))?.text).toBe('✓ Data in staging')
+  expect((await ui.find({ type: 'Text', text: /reprocess_2025/ }))?.text).toBe('└ ▶ reprocess_2025 — ────────  11% · ~1:20 h (0:50–1:50) left')
+  expect((await ui.find({ type: 'Text', text: /attach/ }))?.text).toBe('  └ ○ attach — 0:30–1:30 h')
   expect((await ui.find({ type: 'Text', text: /views/ }))?.text).toBe('    └ ○ views — 20–40 min')
   await ui.unmount()
 
-  expect((await $.command.run({ command: 'eta', args: '' }) as { text?: string }).text).toBe('ETA: faixa fechada.')
-  const fechada = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await fechada.find({ type: 'Text', text: /resta/ })).toBeUndefined()
-  expect((await fechada.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
-  await fechada.unmount()
+  expect((await $.command.run({ command: 'eta', args: '' }) as { text?: string }).text).toBe('ETA: band hidden.')
+  const hidden = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await hidden.find(HEADER)).toBeUndefined()
+  expect((await hidden.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
+  await hidden.unmount()
 
-  expect((await $.command.run({ command: 'eta', args: '' }) as { text?: string }).text).toBe('ETA: faixa aberta.')
-  const de_novo = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await de_novo.find({ type: 'Text', text: /views/ }))?.text).toBe('    └ ○ views — 20–40 min')
-  await de_novo.unmount()
+  expect((await $.command.run({ command: 'eta', args: '' }) as { text?: string }).text).toBe('ETA: band shown.')
+  const again = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await again.find({ type: 'Text', text: /views/ }))?.text).toBe('    └ ○ views — 20–40 min')
+  await again.unmount()
 })
 
-test('perguntas ficam abaixo da árvore e voltam para ela ao serem respondidas', async ($, on) => {
-  await inicia($, on)
+test('questions sit below the tree and return to it once answered', async ($, on) => {
+  await start($, on)
   await $.tool.call({
-    tool: 'mcp__eta__plano',
-    objetivo: 'x',
-    tarefas: [
-      { id: 'a', titulo: 'Importar', min: 60, max: 120, estado: 'andamento' },
-      { id: 'q', titulo: 'Formato do relatório', pai: 'a', min: 60, max: 120, estado: 'pergunta', esperando: 'Opção A ou B?' },
-      { id: 'q2', titulo: 'Gerar relatório', pai: 'q', min: 10, max: 20 },
+    tool: 'mcp__eta__plan',
+    goal: 'x',
+    tasks: [
+      { id: 'a', title: 'Import', min: 60, max: 120, status: 'running' },
+      { id: 'q', title: 'Report format', parent: 'a', min: 60, max: 120, status: 'question', waitingOn: 'Option A or B?' },
+      { id: 'q2', title: 'Build report', parent: 'q', min: 10, max: 20 },
     ],
   })
   let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /resta/ }))?.text).toContain('resta ~1:45 h (1:10–2:20) + 1 dependem de você')
-  expect((await ui.find({ type: 'Text', text: /Formato do relatório/ }))?.text).toBe('? Formato do relatório — Opção A ou B? · depois 1–2 h · +1 depois')
-  expect(await ui.find({ type: 'Text', text: /Gerar relatório/ })).toBeUndefined()
+  expect((await ui.find(HEADER))?.text).toContain('✓ 0/3 · ◷ ~1:45 h left · +1 pending · ✓ ends ~15:25')
+  expect((await ui.find({ type: 'Text', text: /Report format/ }))?.text).toBe('? Report format — Option A or B? · then 1–2 h · +1 after')
+  expect(await ui.find({ type: 'Text', text: /Build report/ })).toBeUndefined()
   await ui.unmount()
 
-  await $.tool.call({ tool: 'mcp__eta__tarefa', id: 'q', estado: 'proxima' })
+  await $.tool.call({ tool: 'mcp__eta__task', id: 'q', status: 'next' })
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Formato do relatório/ }))?.text).toBe('└ ○ Formato do relatório — 1–2 h')
-  expect((await ui.find({ type: 'Text', text: /Gerar relatório/ }))?.text).toBe('  └ ○ Gerar relatório — 10–20 min')
+  expect((await ui.find({ type: 'Text', text: /Report format/ }))?.text).toBe('└ ○ Report format — 1–2 h')
+  expect((await ui.find({ type: 'Text', text: /Build report/ }))?.text).toBe('  └ ○ Build report — 10–20 min')
   await ui.unmount()
 })
 
-test('subagentes e processos em segundo plano entram com ícone próprio e saem ao terminar', async ($, on) => {
+test('subagents and background processes join with their own icon and leave when done', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 * MIN })
   mock.store(on)
-  fuso(on)
+  timeZone(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  const a1 = { id: 'a1', description: 'achar o CSV', type: 'Explore', status: 'running' }
-  let agentes: (typeof a1)[] = []
-  on('agent.list', () => ({ value: agentes }) as never)
+  const a1 = { id: 'a1', description: 'find the CSV', type: 'Explore', status: 'running' }
+  let agents: (typeof a1)[] = []
+  on('agent.list', () => ({ value: agents }) as never)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { agentId: 'a1' } }) as never)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }) as never)
   on('ui.render', { component: 'UserMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
-    return <Text>aviso</Text>
+    return <Text>notice</Text>
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
-  await $.tool.call({ tool: 'mcp__eta__plano', objetivo: 'x', tarefas: [{ id: 'imp', titulo: 'Importar dados', min: 60, max: 120, estado: 'andamento' }] })
-  await $.tool.call({ tool: 'Agent', description: 'achar o CSV', subagent_type: 'Explore', prompt: 'p' } as never)
-  agentes = [a1]
-  await $.tool.call({ tool: 'Bash', command: 'bun run importa.ts 2024-01', run_in_background: true } as never)
+  await $.tool.call({ tool: 'mcp__eta__plan', goal: 'x', tasks: [{ id: 'imp', title: 'Import data', min: 60, max: 120, status: 'running' }] })
+  await $.tool.call({ tool: 'Agent', description: 'find the CSV', subagent_type: 'Explore', prompt: 'p' } as never)
+  agents = [a1]
+  await $.tool.call({ tool: 'Bash', command: 'bun run import.ts 2024-01', run_in_background: true } as never)
   await clock.advance(3 * MIN)
 
   let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Explore/ }))?.text).toBe('└ ◆ Explore: achar o CSV — 3 min')
-  expect((await ui.find({ type: 'Text', text: /importa/ }))?.text).toBe('└ ◐ bun run importa.ts 2024-01 — 3 min')
-  expect((await ui.find({ type: 'Text', text: /resta/ }))?.text).not.toContain('sem estimativa')
+  expect((await ui.find({ type: 'Text', text: /Explore/ }))?.text).toBe('└ ◆ Explore: find the CSV — 3 min')
+  expect((await ui.find({ type: 'Text', text: /import\.ts/ }))?.text).toBe('└ ◐ bun run import.ts 2024-01 — 3 min')
+  expect((await ui.find(HEADER))?.text).not.toContain('unestimated')
   await ui.unmount()
 
-  // O agente acaba (a lista diz) e o aviso do processo chega como mensagem na conversa
-  agentes = [{ ...a1, status: 'completed' }]
+  // The agent ends (the list says so) and the process's notice arrives as a message in the transcript
+  agents = [{ ...a1, status: 'completed' }]
   await clock.advance(MIN)
   const msg = await $.ui.mount({ plugin: 'eta', surface: 'terminal', component: 'UserMessage', props: { task: { id: 'b1', status: 'failed' } } } as never)
   await msg.unmount()
   await clock.advance(2_000)
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /Explore/ }))?.text).toBe('└ ✓ Explore: achar o CSV — levou 4 min')
-  expect((await ui.find({ type: 'Text', text: /importa/ }))?.text).toBe('└ ✕ bun run importa.ts 2024-01 — falhou · levou 4 min')
+  expect((await ui.find({ type: 'Text', text: /Explore/ }))?.text).toBe('└ ✓ Explore: find the CSV — took 4 min')
+  expect((await ui.find({ type: 'Text', text: /import\.ts/ }))?.text).toBe('└ ✕ bun run import.ts 2024-01 — failed · took 4 min')
   await ui.unmount()
 
-  // Passados alguns minutos, saem da árvore
+  // A few minutes later they leave the tree
   await clock.advance(6 * MIN)
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Explore/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /importa/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /import\.ts/ })).toBeUndefined()
   await ui.unmount()
 })
 
-test('ao carregar, subagentes que já rodam entram na árvore', async ($, on) => {
+test('on load, subagents already running join the tree', async ($, on) => {
   mock.clock(on, { now: 1_000 * MIN })
   mock.store(on)
-  fuso(on)
+  timeZone(on)
   on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('agent.list', () => ({ value: [
-    { id: 'a9', description: 'revisar o README', type: 'general-purpose', status: 'running' },
-    { id: 'a8', description: 'velho', type: 'Explore', status: 'completed' },
+    { id: 'a9', description: 'review the README', type: 'general-purpose', status: 'running' },
+    { id: 'a8', description: 'stale', type: 'Explore', status: 'completed' },
   ] }) as never)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /revisar/ }))?.text).toBe('◆ general-purpose: revisar o README — 0 min')
-  expect(await ui.find({ type: 'Text', text: /velho/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /review/ }))?.text).toBe('◆ general-purpose: review the README — 0 min')
+  expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('a plan and history stored by the Portuguese version are migrated', async ($, on) => {
+  mock.clock(on, { now: 1_000 * MIN })
+  mock.store(on, { historico: [{ estimado: 5, real: 10 }] })
+  timeZone(on)
+  on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  // What the Portuguese version stored stays through the reload
+  const legacy = {
+    objetivo: 'Old goal',
+    tarefas: [
+      { id: 'a', titulo: 'Old task', pai: null, min: 5, max: 10, estado: 'andamento', esperando: null, estimada: true, ref: null, inicio: 1_000 * MIN, fim: null },
+      { id: 'q', titulo: 'Old question', pai: null, min: 5, max: 10, estado: 'pergunta', esperando: 'A or B?', estimada: true, ref: null, inicio: null, fim: null },
+    ],
+  }
+  let legacyRead = false
+  on('state.get', ($, e, next) => {
+    if ((e as { key?: string }).key !== 'plano' || legacyRead) return next(e)
+    legacyRead = true
+    return { value: { value: { shape: 'plano-2', value: legacy }, version: 1 } } as never
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find(HEADER))?.text?.startsWith('⏱ Old goal')).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /Old task/ }))?.text).toBe('▶ Old task — ────────  0% · 5–10 min left')
+  expect((await ui.find({ type: 'Text', text: /Old question/ }))?.text).toBe('? Old question — A or B? · then 5–10 min')
+  await ui.unmount()
+  // The old calibration sample counts in the new history
+  const text = String(((await $.tool.call({ tool: 'mcp__eta__plan', goal: 'x', tasks: [{ id: 'z', title: 'z', min: 1, max: 2 }] })) as { result?: unknown }).result)
+  expect(text).toContain('Calibration: 1/5 tasks measured')
 })

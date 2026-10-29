@@ -1,6 +1,6 @@
 {
   "name": "eta",
-  "version": "0.1.0",
-  "description": "Plano em árvore com ETA, relógio real e calibração das estimativas",
+  "version": "0.2.0",
+  "description": "Live task tree with real-clock ETAs and self-calibrating estimates, in a band above the prompt",
   "types": "./types/index.d.ts"
 }

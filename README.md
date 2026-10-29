@@ -1,120 +1,135 @@
 # eta
 
-Mod para o Claude Code que mostra o plano do trabalho como uma árvore de tarefas com tempo estimado, numa faixa acima do prompt. O relógio é real: o mod mede quanto cada tarefa levou, avisa quando uma passa do teto e aprende com o histórico quanto as suas estimativas costumam errar.
+A Claude Code mod that shows the work plan as a live task tree with ETAs, in a band above the prompt. The clock is real: the mod measures how long each task took, flags the ones that run past their ceiling, and learns from your history how far off your estimates tend to be.
 
 ```
 ──────────────────────────────────────────────────────────────────────────────
-⏱ Migrar o banco e publicar a v2… ✓ 4/16 · ◷ resta ~17 h (6–28) · ✓ fim ~amanhã 06:40
+⏱ Migrate the database and ship v2… ✓ 4/16 · ◷ ~17 h left · +1 pending · ✓ ends ~tomorrow 06:40
 
-◷ 1 esperando: Apagar backups antigos (o upload confirmar)
-! Reprocessar arquivo de 2025 — parada? +10 h além
-└ ○ Recalcular índices — 0:30–1:30 h
-  └ ○ Gerar views novas — 20–40 min
-▶ Importar dados (2024-01 → hoje) — ━━━─────  44% · faltam ~14 h (4–24)
-└ ◆ Explore: achar onde o CSV é lido — 3 min
-└ ◐ bun run importa.ts 2024-01 — 12 min
-└ ○ Copiar os meses para o servidor novo — 10–20 min
-✓ Subir a coleta no servidor — levou 5 min
+◷ 1 waiting: Delete old backups (upload confirms)
+! Reprocess the 2025 files — stalled? +10 h over
+└ ○ Rebuild indexes — 0:30–1:30 h
+  └ ○ Build new views — 20–40 min
+▶ Import data (2024-01 → today) — ━━━─────  44% · ~14 h (4–24) left
+└ ◆ Explore: find where the CSV is read — 3 min
+└ ◐ bun run import.ts 2024-01 — 12 min
+└ ○ Copy the months to the new server — 10–20 min
+✓ Start the collector on the server — took 5 min
 
-? Formato do relatório — Opção A ou B? · depois 1–2 h · +1 depois
+? Report format — Option A or B? · then 1–2 h · +1 after
 ```
 
-## O que vem no repositório
+## Install
 
-O mod (`hooks/register.tsx`): a faixa, as ferramentas `mcp__eta__plano` e `mcp__eta__tarefa` que o modelo chama, o espelho do `TodoWrite`, `TaskCreate`/`TaskUpdate`, `Agent` e `Bash` em segundo plano, e o comando `/eta`.
-
-## Instalar
-
-No prompt de uma sessão do Claude Code no terminal:
+At the prompt of a Claude Code session in a terminal:
 
 ```
 /plugin install eta --marketplace rafapolo/ETA
 ```
 
-Responda `y` para adicionar o marketplace e escolha o escopo (usuário é o primeiro).
+Answer `y` to add the marketplace, then pick a scope (user is the first one).
 
-Pelo shell:
+From a shell:
 
 ```
 claude plugin install eta --marketplace rafapolo/ETA
 ```
 
-No app de desktop, onde `/plugin` não roda: clique em + ao lado da caixa do prompt, depois Plugins, Add marketplace com `rafapolo/ETA`, depois Add plugin.
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `rafapolo/ETA`, then Add plugin.
 
-## Símbolos e cores
+## What the model gets
 
-Cada símbolo ocupa uma coluna, para os títulos alinharem; a cor diferencia os estados. As cores são as do tema do Claude Code, então acompanham o tema claro ou escuro.
+The mod registers two tools and tells the model when to call them:
 
-| Símbolo | Estado | Cor | Quando aparece |
+| Tool | What it does |
+|---|---|
+| `mcp__eta__plan` | Registers the whole plan: a goal and tasks with `min`/`max` minute ranges, `parent` for dependencies, and an optional `status`. Calling it again replaces the plan; tasks with the same id or title keep their measured times. The answer is the plan as text plus the calibration factor. |
+| `mcp__eta__task` | Updates one task: `running` when it starts, `done` when it ends, a new `min`/`max` to re-estimate, `waitingOn` for what it waits on or the question it asks. |
+
+## Symbols and colors
+
+Every symbol takes one column, so titles line up; color tells the statuses apart. Colors come from the Claude Code theme, so they follow light and dark themes.
+
+| Symbol | Status | Color | When |
 |---|---|---|---|
-| `▶` | em andamento | verde (`success`) | o modelo chamou `mcp__eta__tarefa` com `andamento` |
-| `◆` | subagente rodando | laranja (`claude`) | o modelo chamou a ferramenta `Agent` |
-| `◐` | processo em segundo plano | ciano (`planMode`) | o modelo rodou `Bash` com `run_in_background` |
-| `○` | na fila | amarelo (`warning`), texto apagado | ainda não começou |
-| `◷` | esperando | magenta (`permission`) | espera algo de fora: outra sessão, download, CI |
-| `?` | pergunta | azul em negrito (`suggestion`) | espera uma resposta sua; fica fora da árvore |
-| `✕` | bloqueada | vermelho (`error`) | não tem como seguir; num subagente ou processo, `falhou` ou `interrompido` |
-| `!` | atrasada | amarelo (`warning`) | passou do teto da faixa |
-| `✓` | feita | verde (`success`), texto apagado | terminou; mostra quanto levou |
+| `▶` | running | green (`success`) | the model marked the task `running` |
+| `◆` | subagent running | orange (`claude`) | the model called the `Agent` tool |
+| `◐` | background process | cyan (`planMode`) | the model ran `Bash` with `run_in_background` |
+| `○` | queued | yellow (`warning`), dimmed text | not started yet |
+| `◷` | waiting | magenta (`permission`) | waits on something outside: another session, a download, CI |
+| `?` | question | bold blue (`suggestion`) | waits on an answer from you; sits below the tree |
+| `✕` | blocked | red (`error`) | cannot go on; for a subagent or process, `failed` or `killed` |
+| `!` | overdue | yellow (`warning`) | went past the top of its range |
+| `✓` | done | green (`success`), dimmed text | finished; shows how long it took |
 
-No cabeçalho e no status:
+The first line, in gray, after the goal in bold:
 
-| Elemento | Cor | O que diz |
+| Part | Says |
+|---|---|
+| `✓ 4/16` | tasks done out of the total |
+| `◷ ~17 h left` | the likely time left: the midpoint of the remaining range |
+| `+1 pending` | questions waiting on you, not counted in the time left |
+| `+2 unestimated` | tasks with no range yet (mirrored from `TodoWrite` or `TaskCreate`) |
+| `✓ ends ~23:02` | the local end time at the likely value: just the time for today, `tomorrow 06:40`, or `Oct 31 09:00` |
+
+On a task's row:
+
+| Part | Color | Says |
 |---|---|---|
-| `⏱ objetivo` | negrito | o pedido, cortado com `…` para caber numa linha |
-| `✓ 4/16` | cinza | tarefas feitas sobre o total |
-| `◷ resta ~17 h (6–28)` | cinza | o valor provável e, entre parênteses, a faixa; faixa estreita aparece sozinha |
-| `✓ fim ~amanhã 06:40` | cinza | a hora local de término pelo valor provável: `hoje`, `amanhã` ou a data |
-| `━━━─────  44%` | azul, a parte vazia apagada | progresso sobre o meio da faixa, até 99% |
-| `faltam ~14 h (4–24)` / `até 3 min` | azul | quanto falta; depois do mínimo, só o teto |
-| `+2 min além` | amarelo | quanto passou do teto |
-| `parada? +10 h além` | amarelo | o estouro passou de 30 min e do próprio teto: provavelmente só não foi encerrada |
-| `· +N depois` | apagado | tarefas que dependem desta e ainda não aparecem |
+| `━━━─────  44%` | blue, empty part dimmed | progress over the range's midpoint, up to 99% |
+| `~14 h (4–24) left` / `up to 3 min left` | blue | what is left; a wide range shows its midpoint first; past the minimum, only the ceiling |
+| `+2 min over` | yellow | how far past the ceiling |
+| `stalled? +10 h over` | yellow | the overrun passed 30 min and the task's own ceiling: most likely it was never closed |
+| `· +N after` | dimmed | tasks that depend on this one and are not shown |
 
-## Como o mod fica sabendo das tarefas
+## How the mod learns about tasks
 
-O mod não observa o trabalho em si: ele escuta chamadas de ferramenta.
+The mod does not watch the work itself: it listens to tool calls.
 
-| Fonte | Entra na árvore | Sai ou muda |
+| Source | Joins the tree | Changes or leaves |
 |---|---|---|
-| `mcp__eta__plano` | o plano inteiro, com faixas e dependências (`pai`); tarefas de mesmo id ou título herdam os horários | um novo plano substitui o anterior |
-| `mcp__eta__tarefa` | — | muda o estado: `andamento` marca o início, `feita` o fim |
-| `TodoWrite` | título novo vira tarefa sem estimativa, na raiz | `pending` → `○`, `in_progress` → `▶`, `completed` → `✓`; sumiu da lista, sai da árvore |
-| `TaskCreate` / `TaskUpdate` | tarefa criada; o primeiro `addBlockedBy` vira a tarefa-mãe | mudança de status; `deleted` tira da árvore |
-| `Agent` (subagente) | `◆ tipo: descrição`, filha da única tarefa em `▶`, se houver uma só | a lista de agentes diz `completed`, `failed` ou `killed` (conferida a cada minuto e ao fim de cada turno do subagente) |
-| `Bash` com `run_in_background` | `◐ descrição ou comando`, filha da única tarefa em `▶` | o aviso de término do processo chega na conversa |
+| `mcp__eta__plan` | the whole plan, with ranges and dependencies | a new plan replaces the old one |
+| `mcp__eta__task` | — | changes the status: `running` stamps the start, `done` the end |
+| `TodoWrite` | a new title becomes an unestimated task at the root | `pending` → `○`, `in_progress` → `▶`, `completed` → `✓`; dropped from the list, it leaves the tree |
+| `TaskCreate` / `TaskUpdate` | the created task; the first `addBlockedBy` becomes its parent | status changes; `deleted` removes it |
+| `Agent` (subagent) | `◆ type: description`, a child of the only `▶` task when there is exactly one | the agent list says `completed`, `failed` or `killed` (checked every minute and after each of the subagent's turns) |
+| `Bash` with `run_in_background` | `◐ description or command`, a child of the only `▶` task | the process's finish notice arrives in the transcript |
 
-Ao carregar (sessão nova ou recarga do mod), os subagentes que já estão rodando entram na árvore, com o tempo contado a partir dali. Processos em segundo plano que começaram antes do mod carregar não aparecem: não há uma lista deles para consultar.
+On load (a new session or a reload of the mod), subagents already running join the tree, timed from that moment. Background processes started before the mod loaded do not show: there is no list of them to read.
 
-Subagentes e processos terminados ficam 5 minutos como `✓ levou X` (ou `✕ falhou`) e depois saem da árvore. Eles não têm estimativa: não entram no `resta` nem no `+N sem estimativa`.
+Finished subagents and processes stay for 5 minutes as `✓ took X` (or `✕ failed`), then leave the tree. They have no estimate, so they count neither in the time left nor as unestimated.
 
-## Como ler a árvore
+## Reading the tree
 
-- `└` recuado sob o ícone de uma tarefa = depende dela: só começa quando ela termina.
-- Tarefas no mesmo recuo são independentes entre si.
-- **Perguntas** ficam numa seção própria, depois de uma linha em branco abaixo da árvore, junto com o que depende delas. Respondida a pergunta, a tarefa volta para a árvore no lugar dela.
-- A linha `◷ N esperando` logo abaixo do cabeçalho junta as esperas externas.
+- `└` indented under a task's icon = depends on it: it starts only when that task is done.
+- Tasks at the same indent are independent of each other.
+- **Questions** sit in their own section, after a blank line below the tree, together with what depends on them. Once answered, the task returns to its place in the tree.
+- The `◷ N waiting` line right below the first line gathers the outside waits.
 
-## Como o tempo é contado
+## How time is counted
 
-- Faixas em minutos de relógio, do início ao fim da tarefa.
-- **Resta:** só as tarefas em andamento correm juntas, e delas vale a mais longa (subagentes e processos são paralelo medido, mas sem estimativa, então só aparecem na árvore); o resto da fila soma em série, porque um agente faz uma coisa de cada vez. Perguntas não entram no número enquanto não forem respondidas: aparecem como `+ N dependem de você`.
-- **Calibração:** cada tarefa estimada que termina vira uma amostra (estimado × real). A partir de 5 amostras, a resposta de `mcp__eta__plano` traz o fator mediano, e o modelo ajusta as próximas faixas por ele. O histórico guarda as últimas 200 amostras, entre sessões.
-- A cada minuto a faixa redesenha sozinha, sem chamar o modelo: o tique não gasta tokens. Só as chamadas de `mcp__eta__plano` e `mcp__eta__tarefa` vão para o modelo.
+- Ranges are in wall-clock minutes, from a task's start to its end.
+- **Time left:** only running tasks run together, and of those the longest counts; the rest of the queue adds up in series, since an agent does one thing at a time. Subagents and processes are measured parallelism but carry no estimate, so they only show in the tree. Questions do not count until answered: they show as `+N pending`.
+- **Calibration:** each estimated task that finishes becomes a sample (estimate × actual). From 5 samples on, the answer of `mcp__eta__plan` carries the median factor, and the model scales its next ranges by it. The history keeps the last 200 samples, across sessions.
+- The band redraws on its own every minute without calling the model: the tick costs no tokens. Only the `mcp__eta__plan` and `mcp__eta__task` calls go to the model.
 
-## Comando `/eta`
+## The `/eta` command
 
-Digite `/eta` no prompt para fechar a faixa; digite de novo para abrir. A resposta diz o estado: `ETA: faixa fechada.` ou `ETA: faixa aberta.`
+Type `/eta` at the prompt to hide the band; type it again to show it. The answer says which: `ETA: band hidden.` or `ETA: band shown.`
 
-- Fechar só esconde: o plano, os tempos e a calibração continuam sendo registrados, e ao abrir a faixa volta atualizada.
-- Vale só para a sessão em que foi digitado; outras sessões e sessões novas começam com a faixa aberta.
-- Não muda nenhuma configuração nem arquivo do mod.
-- Sem `/eta`, a faixa já some sozinha quando não há plano, quando todas as tarefas estão feitas e enquanto o Claude Code mostra uma pesquisa acima do prompt.
+- Hiding only hides: the plan, the times and the calibration keep being recorded, and the band comes back up to date.
+- It applies to the session it was typed in; other sessions and new ones start with the band shown.
+- It changes no setting and no file of the mod.
+- Without `/eta`, the band already hides itself when there is no plan, when every task is done, and while Claude Code shows a survey above the prompt.
 
-## Desenvolver
+## Upgrading from 0.1
+
+Version 0.2 renamed the tools (`mcp__eta__plano` → `mcp__eta__plan`, `mcp__eta__tarefa` → `mcp__eta__task`) and their fields to English. A session that ran 0.1 keeps its plan and calibration history: the mod migrates both on load.
+
+## Develop
 
 ```
-claude --plugin-dir .          # sessão com o mod carregado desta pasta
+claude --plugin-dir .          # a session with the mod loaded from this folder
 claude plugin validate .
 claude plugin test .
 ```
