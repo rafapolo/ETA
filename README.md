@@ -10,7 +10,7 @@ A Claude Code mod that shows the work plan as a live task tree with ETAs, in a b
 ! Reprocess the 2025 files — stalled? +10 h over
 └ ○ Rebuild indexes — 0:30–1:30 h
   └ ○ Build new views — 20–40 min
-▶ Import data (2024-01 → today) — ━━━─────  44% · ~14 h (4–24) left
+▶ Import data (2024-01 → today) — 44% · ~14 h (4–24) left
 └ ◆ Explore: find where the CSV is read — 3 min
 └ ◐ bun run import.ts 2024-01 — 12 min
 └ ○ Copy the months to the new server — 10–20 min
@@ -76,7 +76,7 @@ On a task's row:
 
 | Part | Color | Says |
 |---|---|---|
-| `━━━─────  44%` | blue, empty part dimmed | progress over the range's midpoint, up to 99% |
+| `44%` | blue | progress over the range's midpoint, up to 99% |
 | `~14 h (4–24) left` / `up to 3 min left` | blue | what is left; a wide range shows its midpoint first; past the minimum, only the ceiling |
 | `+2 min over` | yellow | how far past the ceiling |
 | `stalled? +10 h over` | yellow | the overrun passed 30 min and the task's own ceiling: most likely it was never closed |

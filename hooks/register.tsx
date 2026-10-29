@@ -17,7 +17,6 @@ const DEFAULT_GOAL = 'Session tasks'
 const TICK_MS = 60_000
 const HISTORY_MAX = 200
 const MIN_SAMPLES = 5
-const BAR = 8
 // Overrun past which a task was most likely just never closed
 const STALLED_MIN = 30
 // A finished subagent or process stays in the tree this long, then leaves
@@ -78,20 +77,15 @@ const stalled = (t: Task, ms: number) => overdue(t, ms) && elapsed(t, ms) - t.ma
 const rangeOf = (t: Task) => (t.estimated ? range(t.min, t.max) : '?')
 const took = (t: Task, ms: number) => dur(elapsed(t, ms))
 
-// Running task: bar and % over the range's midpoint (up to 99%), and what is left; past the ceiling, only the overrun
+// Running task: % over the range's midpoint (up to 99%), and what is left; past the ceiling, only the overrun
 function progress(t: Task, ms: number): Part[] {
   const d = elapsed(t, ms)
   if (!t.estimated) return [{ text: dur(d), color: 'suggestion' }]
   if (d > t.max) return [{ text: `${stalled(t, ms) ? 'stalled? ' : ''}+${dur(d - t.max)} over`, color: 'warning' }]
   const mid = (t.min + t.max) / 2 || t.max || 1
   const pct = Math.min(99, Math.floor((d / mid) * 100))
-  const full = Math.max(0, Math.min(BAR, Math.floor((pct / 100) * BAR) || 0))
   const left = d >= t.min ? `up to ${dur(t.max - d)} left` : `${likely(t.min - d, t.max - d)} left`
-  return [
-    { text: '━'.repeat(full), color: 'suggestion' },
-    { text: '─'.repeat(BAR - full), dim: true },
-    { text: `  ${pct}% · ${left}`, color: 'suggestion' },
-  ]
+  return [{ text: `${pct}% · ${left}`, color: 'suggestion' }]
 }
 
 // ── calibration ──────────────────────────────────────────────────────────
