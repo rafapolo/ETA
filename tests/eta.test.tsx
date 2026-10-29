@@ -259,3 +259,49 @@ test('perguntas ficam abaixo da árvore e voltam para ela ao serem respondidas',
   expect((await ui.find({ type: 'Text', text: /Gerar relatório/ }))?.text).toBe('  └ ○ Gerar relatório — 10–20 min')
   await ui.unmount()
 })
+
+test('subagentes e processos em segundo plano entram com ícone próprio e saem ao terminar', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 * MIN })
+  mock.store(on)
+  fuso(on)
+  on('tool.register', (_, e) => ({ value: { tool: `mcp__eta__${(e as { name: string }).name}` } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  let agentes = [{ id: 'a1', description: 'achar o CSV', type: 'Explore', status: 'running' }]
+  on('agent.list', () => ({ value: agentes }) as never)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { agentId: 'a1' } }) as never)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }) as never)
+  on('ui.render', { component: 'UserMessage' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>aviso</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  await $.tool.call({ tool: 'mcp__eta__plano', objetivo: 'x', tarefas: [{ id: 'imp', titulo: 'Importar dados', min: 60, max: 120, estado: 'andamento' }] })
+  await $.tool.call({ tool: 'Agent', description: 'achar o CSV', subagent_type: 'Explore', prompt: 'p' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'bun run importa.ts 2024-01', run_in_background: true } as never)
+  await clock.advance(3 * MIN)
+
+  let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Explore/ }))?.text).toBe('└ ◆ Explore: achar o CSV — 3 min')
+  expect((await ui.find({ type: 'Text', text: /importa/ }))?.text).toBe('└ ◐ bun run importa.ts 2024-01 — 3 min')
+  expect((await ui.find({ type: 'Text', text: /resta/ }))?.text).not.toContain('sem estimativa')
+  await ui.unmount()
+
+  // O agente acaba (a lista diz) e o aviso do processo chega como mensagem na conversa
+  agentes = [{ ...agentes[0]!, status: 'completed' }]
+  await clock.advance(MIN)
+  const msg = await $.ui.mount({ plugin: 'eta', surface: 'terminal', component: 'UserMessage', props: { task: { id: 'b1', status: 'failed' } } } as never)
+  await msg.unmount()
+  await clock.advance(2_000)
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Explore/ }))?.text).toBe('└ ✓ Explore: achar o CSV — levou 4 min')
+  expect((await ui.find({ type: 'Text', text: /importa/ }))?.text).toBe('└ ✕ bun run importa.ts 2024-01 — falhou · levou 4 min')
+  await ui.unmount()
+
+  // Passados alguns minutos, saem da árvore
+  await clock.advance(6 * MIN)
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Explore/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /importa/ })).toBeUndefined()
+  await ui.unmount()
+})

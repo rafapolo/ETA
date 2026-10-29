@@ -18,6 +18,8 @@ const MIN_AMOSTRAS = 5
 const BARRA = 8
 // Estouro a partir do qual a tarefa provavelmente só não foi encerrada
 const PARADA_MIN = 30
+// Subagente ou processo que terminou fica na árvore por esse tempo, depois sai
+const LIMPA_MS = 5 * 60_000
 
 // Símbolos de uma coluna só, para os títulos alinharem; a cor diferencia os estados
 const ICONE: Record<Estado, string> = {
@@ -60,6 +62,13 @@ function provavel(lo: number, hi: number): string {
   if (hi < 60 || hi <= lo * 1.5) return faixa(lo, hi)
   return `~${dur((lo + hi) / 2)} (${faixa(lo, hi).replace(/ (min|h)$/, '')})`
 }
+
+// Subagentes e processos em segundo plano: trabalho em paralelo de verdade, com ícone próprio enquanto rodam
+const PARALELA: Record<NonNullable<Tarefa['tipo']>, { texto: string; cor: Color }> = {
+  agente: { texto: '◆', cor: 'claude' },
+  processo: { texto: '◐', cor: 'planMode' },
+}
+const sumiu = (t: Tarefa, ms: number) => t.tipo != null && t.estado !== 'andamento' && t.fim != null && ms - t.fim > LIMPA_MS
 
 const decorrido = (t: Tarefa, ms: number) => (t.inicio == null ? 0 : Math.max(0, ((t.fim ?? ms) - t.inicio) / 60_000))
 const atrasada = (t: Tarefa, ms: number) => t.estimada && t.estado === 'andamento' && decorrido(t, ms) > t.max
@@ -118,6 +127,7 @@ function restante(p: Plano, ms: number): [number, number] {
 
 function iconeDe(t: Tarefa, ms: number): Parte {
   if (atrasada(t, ms)) return { texto: '!', cor: 'warning' }
+  if (t.tipo && t.estado === 'andamento') return PARALELA[t.tipo]
   const texto = ICONE[t.estado]
   if (t.estado === 'andamento' || t.estado === 'feita') return { texto, cor: 'success' }
   if (t.estado === 'esperando') return { texto, cor: 'permission' }
@@ -130,6 +140,7 @@ function statusDe(t: Tarefa, ms: number): Parte[] {
   // Feita sem duração real (já nasceu feita) não tem o que mostrar
   if (t.estado === 'feita') return decorrido(t, ms) >= 1 ? [{ texto: `levou ${levou(t, ms)}` }] : []
   if (t.estado === 'andamento') return progresso(t, ms)
+  if (t.tipo && t.estado === 'bloqueada') return [{ texto: `${t.esperando ?? 'falhou'} · levou ${levou(t, ms)}`, cor: 'error' }]
   if (t.estado === 'esperando') {
     const depois = t.estimada && t.max > 0 ? ` · depois ${faixaDe(t)}` : ''
     return [{ texto: `? ${t.esperando ?? ''}`.trim() + depois, cor: 'permission' }]
@@ -173,7 +184,7 @@ function linhasPerguntas(p: Plano, ms: number): Linha[] {
 
 // └─ recuado = depende da tarefa-mãe; tarefas no mesmo recuo são independentes entre si
 function arvore(p: Plano, ms: number): Linha[] {
-  const fora = new Set(perguntas(p).flatMap(q => [q.pergunta.id, ...q.presas]))
+  const fora = new Set([...perguntas(p).flatMap(q => [q.pergunta.id, ...q.presas]), ...p.tarefas.filter(t => sumiu(t, ms)).map(t => t.id)])
   const tarefas = p.tarefas.filter(t => !fora.has(t.id))
   const ids = new Set(tarefas.map(t => t.id))
   const filhos = new Map<string | null, Tarefa[]>()
@@ -233,7 +244,8 @@ function termino(p: Plano, ms: number): string {
   return hi <= 0 ? '' : `fim ~${quando(ms + ((lo + hi) / 2) * 60_000, ms)}`
 }
 
-const semEstimativa = (p: Plano) => p.tarefas.filter(t => !t.estimada && t.estado !== 'feita' && t.estado !== 'pergunta').length
+const semEstimativa = (p: Plano) =>
+  p.tarefas.filter(t => !t.estimada && !t.tipo && t.estado !== 'feita' && t.estado !== 'pergunta').length
 const resto = (p: Plano, ms: number) => {
   const [lo, hi] = restante(p, ms)
   const n = semEstimativa(p)
@@ -304,13 +316,53 @@ async function aplica($: EngineInterface, muda: (p: Plano, ms: number) => Plano)
 }
 
 const DE_TODO: Record<string, Estado> = { pending: 'proxima', in_progress: 'andamento', completed: 'feita' }
-const espelhada = (t: Tarefa) => t.id.startsWith('todo:') || t.id.startsWith('task:')
+const espelhada = (t: Tarefa) => t.id.startsWith('todo:') || t.id.startsWith('task:') || t.tipo != null
 const nova = (id: string, titulo: string, ref: string | null = null): Tarefa => ({
   id, titulo, pai: null, min: 0, max: 0, estado: 'proxima', esperando: null, estimada: false, ref, inicio: null, fim: null,
 })
 
+// Entra como filha da única tarefa em andamento do plano (é trabalho para ela); com zero ou várias, na raiz
+function entraParalela(p: Plano, x: Pick<Tarefa, 'id' | 'titulo' | 'tipo' | 'ref' | 'inicio' | 'fim'>): Plano {
+  if (p.tarefas.some(t => t.id === x.id)) return p
+  const rodando = p.tarefas.filter(t => t.estado === 'andamento' && !t.tipo)
+  const t: Tarefa = {
+    ...nova(x.id, x.titulo, x.ref), ...x, pai: rodando.length === 1 ? rodando[0]!.id : null,
+    estado: x.fim != null ? 'feita' : 'andamento',
+  }
+  return { ...p, tarefas: [...p.tarefas, t] }
+}
+
+// Fecha um subagente ou processo: feita, ou bloqueada com o motivo quando falhou ou foi interrompido
+async function encerra($: EngineInterface, achar: (t: Tarefa) => boolean, status: string | undefined, duracao?: number) {
+  const p = await read($, plano)
+  if (!p?.tarefas.some(t => t.tipo && t.estado === 'andamento' && achar(t))) return
+  const falhou = status === 'failed' ? 'falhou' : status === 'killed' ? 'interrompido' : null
+  await aplica($, (atual, ms) => ({
+    ...atual,
+    tarefas: atual.tarefas.map(t => {
+      if (!t.tipo || t.estado !== 'andamento' || !achar(t)) return t
+      const fim = duracao != null && t.inicio != null ? Math.max(t.inicio, Math.min(ms, t.inicio + duracao)) : ms
+      return { ...t, estado: falhou ? 'bloqueada' : 'feita', esperando: falhou, fim }
+    }),
+  }))
+}
+
+async function confereAgentes($: EngineInterface) {
+  const p = await read($, plano)
+  if (!p?.tarefas.some(t => t.tipo === 'agente' && t.estado === 'andamento')) return
+  for (const a of await $.agent.list()) {
+    if (a.status === 'completed' || a.status === 'failed' || a.status === 'killed') {
+      await encerra($, t => t.id === `agente:${a.id}`, a.status)
+    }
+  }
+}
+
+type Aviso = { id?: string; status?: string; toolUseId?: string; durationMs?: number }
+
 export const register: Register = on => {
   const avisadas = new Set<string>()
+  // Avisos de término vistos ao desenhar a conversa: gravar ali é recusado, então o timer de 2 s aplica depois
+  const avisos: Aviso[] = []
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -378,12 +430,32 @@ export const register: Register = on => {
       if (m) offsetMin = (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]))
     } catch {}
 
+    $.clock.every(2_000, () => {
+      if (avisos.length === 0) return
+      const lote = avisos.splice(0)
+      void (async () => {
+        for (const task of lote) {
+          try {
+            await encerra(
+              $,
+              t => (task.toolUseId != null && t.ref === task.toolUseId) || (task.id != null && t.id.endsWith(`:${task.id}`)),
+              task.status,
+              task.durationMs,
+            )
+          } catch {}
+        }
+      })()
+    })
+
     const inicio = await $.clock.now()
     await update($, agora, () => inicio)
     $.clock.every(TICK_MS, () => {
       void (async () => {
         const ms = await $.clock.now()
         await update($, agora, () => ms)
+        try {
+          await confereAgentes($)
+        } catch {}
         const p = await read($, plano)
         for (const t of p?.tarefas ?? []) {
           if (atrasada(t, ms) && !avisadas.has(t.id)) {
@@ -548,6 +620,65 @@ export const register: Register = on => {
       })
     } catch {}
     return r
+  })
+
+  // ── subagentes e processos em segundo plano ───────────────────────────────
+
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    const r = await next(e)
+    try {
+      if ('deny' in r || r.isError) return r
+      const res = r.result as { agentId?: unknown; totalDurationMs?: unknown } | undefined
+      const id = str(res?.agentId)
+      if (!id) return r
+      const a = e as { description?: unknown; subagent_type?: unknown }
+      // Em primeiro plano a chamada só volta com o agente pronto, já trazendo a duração
+      const duracao = typeof res?.totalDurationMs === 'number' ? res.totalDurationMs : null
+      const ms = await $.clock.now()
+      await aplica($, atual =>
+        entraParalela(atual, {
+          id: `agente:${id}`, titulo: `${str(a.subagent_type) ?? 'agente'}: ${str(a.description) ?? 'subagente'}`,
+          tipo: 'agente', ref: e.tool_use_id, inicio: duracao != null ? ms - duracao : ms, fim: duracao != null ? ms : null,
+        }),
+      )
+    } catch {}
+    return r
+  })
+
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const r = await next(e)
+    try {
+      if ('deny' in r || r.isError) return r
+      const id = str((r.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId)
+      if (!id) return r
+      const b = e as { command?: unknown; description?: unknown }
+      const ms = await $.clock.now()
+      await aplica($, atual =>
+        entraParalela(atual, {
+          id: `processo:${id}`, titulo: str(b.description) ?? corta(str(b.command) ?? 'processo', 60),
+          tipo: 'processo', ref: e.tool_use_id, inicio: ms, fim: null,
+        }),
+      )
+    } catch {}
+    return r
+  })
+
+  // Um subagente terminou um turno: confere na lista se acabou de vez
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if ((e as { agentId?: string }).agentId) {
+      try {
+        await confereAgentes($)
+      } catch {}
+    }
+    return r
+  })
+
+  // O aviso de término de uma tarefa em segundo plano chega como mensagem na conversa: fecha a tarefa dele
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const task = (e.props as { task?: Aviso }).task
+    if (task && (task.id || task.toolUseId)) avisos.push({ ...task })
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

@@ -14,6 +14,8 @@ export type Tarefa = {
   ref: string | null
   inicio: number | null
   fim: number | null
+  /** Subagente (Agent) ou processo em segundo plano (Bash), espelhados sozinhos */
+  tipo?: 'agente' | 'processo'
 }
 
 export type Plano = { objetivo: string; tarefas: Tarefa[] }
