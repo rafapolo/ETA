@@ -21,8 +21,7 @@ Mod para o Claude Code que mostra o plano do trabalho como uma árvore de tarefa
 
 ## O que vem no repositório
 
-- **Mod** (`hooks/register.tsx`): a faixa, as ferramentas `mcp__eta__plano` e `mcp__eta__tarefa` que o modelo chama, o espelho do `TodoWrite`/`TaskCreate`/`TaskUpdate` e o comando `/eta`.
-- **Skill** `/eta-status` (`skills/eta-status/SKILL.md`): um relatório de status na conversa, com árvore, confiança e pendências, e o hábito de estimar cada tarefa antes de começar.
+O mod (`hooks/register.tsx`): a faixa, as ferramentas `mcp__eta__plano` e `mcp__eta__tarefa` que o modelo chama, o espelho do `TodoWrite`, `TaskCreate`/`TaskUpdate`, `Agent` e `Bash` em segundo plano, e o comando `/eta`.
 
 ## Instalar
 
@@ -103,9 +102,14 @@ Subagentes e processos terminados ficam 5 minutos como `✓ levou X` (ou `✕ fa
 - **Calibração:** cada tarefa estimada que termina vira uma amostra (estimado × real). A partir de 5 amostras, a resposta de `mcp__eta__plano` traz o fator mediano, e o modelo ajusta as próximas faixas por ele. O histórico guarda as últimas 200 amostras, entre sessões.
 - A cada minuto a faixa redesenha sozinha, sem chamar o modelo: o tique não gasta tokens. Só as chamadas de `mcp__eta__plano` e `mcp__eta__tarefa` vão para o modelo.
 
-## Comando
+## Comando `/eta`
 
-- `/eta` abre ou fecha a faixa nesta sessão.
+Digite `/eta` no prompt para fechar a faixa; digite de novo para abrir. A resposta diz o estado: `ETA: faixa fechada.` ou `ETA: faixa aberta.`
+
+- Fechar só esconde: o plano, os tempos e a calibração continuam sendo registrados, e ao abrir a faixa volta atualizada.
+- Vale só para a sessão em que foi digitado; outras sessões e sessões novas começam com a faixa aberta.
+- Não muda nenhuma configuração nem arquivo do mod.
+- Sem `/eta`, a faixa já some sozinha quando não há plano, quando todas as tarefas estão feitas e enquanto o Claude Code mostra uma pesquisa acima do prompt.
 
 ## Desenvolver
 
